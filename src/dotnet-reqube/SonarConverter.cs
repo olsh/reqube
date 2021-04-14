@@ -13,6 +13,7 @@ using ReQube.Models;
 using ReQube.Models.ReSharper;
 using ReQube.Models.SonarQube;
 using ReQube.Models.SonarQube.Generic;
+using ReQube.Utils;
 using Serilog;
 using Constants = ReQube.Models.Constants;
 
@@ -22,7 +23,7 @@ namespace ReQube
     {
         private static readonly JsonSerializerSettings JsonSerializerSettings
             = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
-        
+
         private readonly Options _options;
         private readonly IDictionary<string, string> _reportPathsByProject = new Dictionary<string, string>();
 
@@ -32,7 +33,7 @@ namespace ReQube
         internal ILogger Logger { private get; set; } = LoggerFactory.GetLogger();
 
         internal SonarMetaDataWriterFactory SonarMetaDataWriterFactory { private get; set; }
-            = new SonarMetaDataWriterFactory();        
+            = new SonarMetaDataWriterFactory();
 
         public SonarConverter(Options options)
         {
@@ -76,12 +77,14 @@ namespace ReQube
                 reSharperReport.Information.Solution = Path.GetFullPath(reSharperReport.Information.Solution);
             }
 
+            reSharperReport.Information.Solution = reSharperReport.Information.Solution.Fix();
             var solutionDir = Path.GetDirectoryName(reSharperReport.Information.Solution);
 
             foreach (var project in reSharperReport.Issues)
             {
                 foreach (var issue in project.Issue)
                 {
+                    issue.File = issue.File.Fix();
                     if (!Path.IsPathFullyQualified(issue.File))
                     {
                         // if file paths are not fully qualified, they are relative to the solution directory
@@ -122,7 +125,7 @@ namespace ReQube
                     {
                         return true;
                     }
-                }                
+                }
             }
 
             return false;
@@ -148,7 +151,7 @@ namespace ReQube
                     if (!excludedRulesLookup.TryGetValue(filterParts[0], out var messageFilters))
                     {
                         messageFilters = new List<Regex>();
-                        excludedRulesLookup.Add(filterParts[0], messageFilters);                        
+                        excludedRulesLookup.Add(filterParts[0], messageFilters);
                     }
 
                     messageFilters.Add(filterParts.Length > 1 ? new Regex(filterParts[1]) : null);
@@ -177,24 +180,25 @@ namespace ReQube
             var solution = SolutionParser.Parse(report.Information.Solution);
             ValidateSolution(solution);
 
-            var baseDir = string.IsNullOrEmpty(options.Directory) 
+            var baseDir = string.IsNullOrEmpty(options.Directory)
                 ? Path.GetDirectoryName(report.Information.Solution) : options.Directory;
             var sonarReports = SonarReportGeneratorFactory.GetGenerator(options.OutputFormat).Generate(report);
 
             if (options.OutputFormat == SonarOutputFormat.Generic)
             {
                 // We need to write dummy report because SonarQube MSBuild reads a report from the root
-                WriteReport(
-                    GetOutputPath(baseDir, options.Output, string.Empty),
-                    SonarGenericReport.Empty);
+                var filePath = GetOutputPath(baseDir, options.Output, string.Empty);
+                filePath = filePath.Fix();
+                WriteReport(filePath, SonarGenericReport.Empty);
             }
-
             foreach (var sonarReport in sonarReports)
             {
+                var projectFolder = GetProjectFolder(solution, sonarReport.ProjectName);
                 var filePath = GetOutputPath(
                     baseDir,
-                    Path.Combine(GetProjectFolder(solution, sonarReport.ProjectName), options.Output),
+                    Path.Combine(projectFolder, options.Output),
                     sonarReport.ProjectName);
+                filePath = filePath.Fix();
                 WriteReport(filePath, sonarReport);
             }
 
@@ -236,7 +240,8 @@ namespace ReQube
             var path = solution.Projects
                 .Where(x => x.Name == projectName && x.TypeGuid != Constants.ProjectTypeGuids["Solution Folder"])
                 .Select(x => x.Path)
-                .FirstOrDefault();
+                .FirstOrDefault()
+                .Fix();
 
             return path != null ? Path.GetDirectoryName(path) : projectName;
         }
@@ -300,7 +305,7 @@ namespace ReQube
                 WriteReport(reportPath, SonarGenericReport.Empty);
             }
         }
-        
+
         private void ValidateSolution(ISolution solution)
         {
             foreach (var project in solution.Projects)
@@ -310,6 +315,6 @@ namespace ReQube
                     throw new ArgumentException("Solution cannot contain absolute project paths.");
                 }
             }
-        }        
+        }
     }
 }
